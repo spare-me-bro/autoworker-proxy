@@ -1,0 +1,124 @@
+name: Run Mods Center Patch
+run-name: "Mods Center patch job"
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: "Pipeline task id"
+        required: true
+        type: string
+      script_ids:
+        description: "Comma-separated patch ids"
+        required: true
+        type: string
+      attachments:
+        description: "Comma-separated attachment URLs"
+        required: true
+        type: string
+      pipeline_title:
+        description: "Build title"
+        required: false
+        type: string
+      android_version:
+        description: "Android version metadata"
+        required: false
+        type: string
+      ui_name:
+        description: "UI name metadata"
+        required: false
+        type: string
+      ui_version:
+        description: "UI version metadata"
+        required: false
+        type: string
+      requested_by_username:
+        description: "Requester username override"
+        required: false
+        type: string
+      output_type:
+        description: "Output package type"
+        required: false
+        default: compressed
+        type: choice
+        options:
+          - magisk
+          - recovery
+          - compressed
+      upload_url:
+        description: "Per-run upload endpoint or optional override"
+        required: false
+        type: string
+      upload_api_key:
+        description: "Per-run upload result URL or legacy API key"
+        required: false
+        type: string
+      callback_url:
+        description: "Optional callback endpoint override"
+        required: false
+        type: string
+      callback_secret:
+        description: "Per-run callback authentication secret"
+        required: false
+        type: string
+
+concurrency:
+  group: autoworker-${{ inputs.task_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Set up dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq zip unzip wget curl zstd openjdk-17-jre-headless
+
+      - name: Mask dispatched values
+        shell: bash
+        run: |
+          [[ -n "$GITHUB_ACTOR" ]] && printf '::add-mask::%s\n' "$GITHUB_ACTOR"
+          while IFS= read -r value; do
+            [[ -n "$value" ]] || continue
+            printf '::add-mask::%s\n' "$value"
+            while IFS= read -r item; do
+              item="${item#"${item%%[![:space:]]*}"}"
+              item="${item%"${item##*[![:space:]]}"}"
+              [[ -n "$item" ]] && printf '::add-mask::%s\n' "$item"
+            done < <(printf '%s\n' "$value" | tr ',' '\n')
+          done < <(jq -r '.inputs // {} | .[] | select(type == "string" and length > 0)' "$GITHUB_EVENT_PATH")
+
+      - name: Checkout private worker
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ secrets.PRIVATE_REPO }}
+          ref: main
+          path: private-worker
+          ssh-key: ${{ secrets.PRIVATE_REPO_SSH_KEY }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Run private automation pipeline
+        shell: bash
+        working-directory: private-worker
+        env:
+          WORKSPACE: ${{ github.workspace }}/private-worker
+          TASK_ID: ${{ inputs.task_id }}
+          SCRIPT_IDS: ${{ inputs.script_ids }}
+          ATTACHMENTS: ${{ inputs.attachments }}
+          PIPELINE_TITLE: ${{ inputs.pipeline_title }}
+          ANDROID_VERSION: ${{ inputs.android_version }}
+          UI_NAME: ${{ inputs.ui_name }}
+          UI_VERSION: ${{ inputs.ui_version }}
+          REQUESTED_BY_USERNAME: ${{ inputs.requested_by_username }}
+          PACKAGE_TYPE: ${{ inputs.output_type }}
+          UPLOAD_URL: ${{ inputs.upload_url || secrets.UPLOAD_URL }}
+          UPLOAD_API_KEY: ${{ inputs.upload_api_key || secrets.UPLOAD_API_KEY }}
+          CALLBACK_URL: ${{ inputs.callback_url || secrets.CALLBACK_URL }}
+          CALLBACK_SECRET: ${{ inputs.callback_secret || secrets.CALLBACK_SECRET }}
+        run: bash main.sh
