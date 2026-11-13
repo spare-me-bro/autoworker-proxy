@@ -73,11 +73,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Set up dependencies
+      - name: Set up Java
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq zip unzip wget curl zstd openjdk-17-jre-headless
+          sudo apt-get install -y openjdk-17-jre-headless
 
       - name: Mask dispatched values
         shell: bash
@@ -93,21 +93,33 @@ jobs:
             done < <(printf '%s\n' "$value" | tr ',' '\n')
           done < <(jq -r '.inputs // {} | .[] | select(type == "string" and length > 0)' "$GITHUB_EVENT_PATH")
 
-      - name: Checkout private worker
+      # The worker is xdkit (patches, assets, packaging, upload, callbacks).
+      # PRIVATE_REPO names the xdkit repo; PRIVATE_REPO_SSH_KEY is a read-only deploy key for it.
+      - name: Checkout xdkit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ${{ secrets.PRIVATE_REPO }}
-          ref: main
-          path: private-worker
+          ref: beta
+          path: xdkit
           ssh-key: ${{ secrets.PRIVATE_REPO_SSH_KEY }}
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Run private automation pipeline
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          working-directory: xdkit
+
+      - name: Install xdkit
         shell: bash
-        working-directory: private-worker
+        working-directory: xdkit
+        run: uv sync --frozen --no-dev
+
+      - name: Run patch job
+        shell: bash
+        working-directory: xdkit
         env:
-          WORKSPACE: ${{ github.workspace }}/private-worker
+          XDKIT_WORKBASE: ${{ github.workspace }}/xdkit/workbase
           TASK_ID: ${{ inputs.task_id }}
           SCRIPT_IDS: ${{ inputs.script_ids }}
           ATTACHMENTS: ${{ inputs.attachments }}
@@ -121,4 +133,4 @@ jobs:
           UPLOAD_API_KEY: ${{ inputs.upload_api_key || secrets.UPLOAD_API_KEY }}
           CALLBACK_URL: ${{ inputs.callback_url || secrets.CALLBACK_URL }}
           CALLBACK_SECRET: ${{ inputs.callback_secret || secrets.CALLBACK_SECRET }}
-        run: bash main.sh
+        run: uv run --frozen --no-dev xdkit worker run
